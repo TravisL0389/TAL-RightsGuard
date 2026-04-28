@@ -1,0 +1,22 @@
+{
+  "name": "RightsGuard AI",
+  "short_name": "RightsGuard",
+  "description": "AI music copyright, licensing, and release-readiness workspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#071015",
+  "theme_color": "#071015",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
