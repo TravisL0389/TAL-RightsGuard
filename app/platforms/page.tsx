@@ -24,8 +24,8 @@ export default function PlatformsPage() {
     if (stored) {
       try {
         setCustomPlatforms(JSON.parse(stored));
-      } catch (e) {
-        console.error('Failed to parse custom platforms', e);
+      } catch {
+        console.error('Failed to parse custom platforms');
       }
     }
   }, []);
@@ -34,7 +34,7 @@ export default function PlatformsPage() {
     try {
       const url = new URL(urlString);
       return url.protocol === 'http:' || url.protocol === 'https:';
-    } catch (e) {
+    } catch {
       return false;
     }
   };
