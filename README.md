@@ -74,6 +74,44 @@ The project uses `output: 'standalone'` in `next.config.ts`, which drastically r
 - **Responsive UI:** Optimized for desktop and mobile with a polished app-shell navigation pattern.
 - **PWA Ready:** Includes manifest metadata and local app icons.
 
+## Shared SaaS Core
+
+RightsGuard now includes the same sellable-app backbone as the inventory app, with Azure-first support:
+
+- Azure PostgreSQL workspace/account snapshot support at `app/api/account/route.ts`
+- Azure-aware workspace bootstrap at `app/api/bootstrap-workspace/route.ts`
+- Stripe checkout and portal routes under `app/api/billing`
+- Stripe webhook sync route at `app/api/stripe-webhook/route.ts`
+- Azure Blob evidence upload route at `app/api/storage/evidence-upload/route.ts`
+- Health/readiness route at `app/api/health/route.ts`
+- Shared schema in `supabase/migrations/20260429_shared_rightsguard_saas_core.sql`
+
+Copy `.env.example` to `.env.local` and fill in:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+AZURE_POSTGRES_URL=postgresql://username:password@your-server.postgres.database.azure.com:5432/rightsguard
+AZURE_POSTGRES_SSL=true
+AZURE_BLOB_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=youraccount;AccountKey=yourkey;EndpointSuffix=core.windows.net
+AZURE_BLOB_CONTAINER_EVIDENCE=rights-evidence
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_public_anon_key
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+STRIPE_SECRET_KEY=sk_test_123
+STRIPE_WEBHOOK_SECRET=whsec_123
+STRIPE_PRICE_STARTER=price_starter_123
+STRIPE_PRICE_PRO=price_pro_123
+STRIPE_PRICE_STUDIO=price_studio_123
+RESEND_API_KEY=re_123
+APP_BASE_URL=http://localhost:3000
+DEFAULT_WORKSPACE_SLUG=rightsguard
+```
+
+Azure mode only requires `AZURE_POSTGRES_URL`, `AZURE_BLOB_CONNECTION_STRING`, Stripe, and Gemini. Supabase stays optional if you still want hosted auth later. In Azure owner mode, the sidebar can bootstrap the first workspace without a Supabase sign-in.
+
+Apply the SQL migration before switching the app from seeded workspace mode to a live backend mode.
+
 ## Quality Assurance
 - All forms include validation and error states.
 - Gemini usage is routed through server endpoints to avoid exposing the API key in the browser.

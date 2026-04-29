@@ -1,11 +1,11 @@
 'use client';
 
 import Link from 'next/link';
+import { useMemo, useState } from 'react';
 import {
   ArrowRight,
   Bell,
   Check,
-  Circle,
   FileCheck2,
   HelpCircle,
   LayoutTemplate,
@@ -13,7 +13,11 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useRightsWorkspaceData, createEvidenceRecord, createRightsMemo, createRightsWork, uploadEvidenceFile } from '@/hooks/use-rights-workspace-data';
+import { useSupabaseAuth } from '@/hooks/use-supabase-auth';
+import { useWorkspaceSnapshot } from '@/hooks/use-workspace-snapshot';
 import { platformsDatabase } from '@/lib/platforms';
+import type { RightsWork } from '@/lib/saas-types';
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -58,25 +62,6 @@ const jurisdictions = [
   { region: 'Australia', status: 'Registered', protection: 'Life + 70 years' },
 ];
 
-const recentWorks = [
-  { title: 'Midnight Drive', code: 'ISRC: US-LMR-25-00001', type: 'Recording', status: 'In Progress', updated: '2h ago', accent: 'from-indigo-500 to-sky-400' },
-  { title: 'Fading Signals', code: 'ISWC: T-312.789.654-1', type: 'Composition', status: 'Completed', updated: '1d ago', accent: 'from-amber-500 to-rose-400' },
-  { title: 'Echoes of You', code: 'ISRC: US-LMR-25-00002', type: 'Recording', status: 'In Progress', updated: '2d ago', accent: 'from-sky-400 to-indigo-200' },
-  { title: 'Stardust', code: 'ISWC: T-312.789.654-2', type: 'Composition', status: 'Completed', updated: '3d ago', accent: 'from-slate-500 to-orange-300' },
-  { title: 'Lunar Waves', code: 'ISRC: US-LMR-25-00003', type: 'Recording', status: 'Pending', updated: '5d ago', accent: 'from-fuchsia-500 to-violet-300' },
-];
-
-const evidence = [
-  { title: 'Composition Document', detail: 'MIDI, score, or lead sheet', done: true },
-  { title: 'Lyrics / Melody Sheet', detail: 'PDF', done: true },
-  { title: 'DAW Session File', detail: 'Logic Pro Project', done: true },
-  { title: 'Audio Stems', detail: 'WAV', done: true },
-  { title: 'Sound Recording', detail: 'High-quality WAV', done: false },
-  { title: 'Metadata & Credits', detail: 'Contributors, producers', done: true },
-  { title: 'Contracts & Agreements', detail: 'Featured artist agreement', done: false },
-  { title: 'Release Plan', detail: 'Distribution & marketing', done: false },
-];
-
 function statusTone(status: string) {
   if (status === 'Completed' || status === 'Registered' || status === 'Monetizable') {
     return 'text-emerald-200';
@@ -89,10 +74,174 @@ function statusTone(status: string) {
   return 'text-amber-200';
 }
 
+function relativeTime(isoDate: string) {
+  const diffMs = Date.now() - new Date(isoDate).getTime();
+  const diffHours = Math.max(1, Math.round(diffMs / (1000 * 60 * 60)));
+
+  if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  }
+
+  const diffDays = Math.round(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
+function workAccent(workType: RightsWork['workType']) {
+  switch (workType) {
+    case 'composition':
+      return 'from-amber-500 to-rose-400';
+    case 'recording':
+      return 'from-indigo-500 to-sky-400';
+    case 'release':
+      return 'from-fuchsia-500 to-violet-300';
+    case 'agreement':
+      return 'from-slate-500 to-orange-300';
+    default:
+      return 'from-slate-500 to-sky-400';
+  }
+}
+
 export default function Dashboard() {
+  const { snapshot } = useWorkspaceSnapshot();
+  const { session } = useSupabaseAuth();
+  const workspaceSlug = snapshot?.workspace.workspaceSlug || 'rightsguard';
+  const { data: rightsData, loading: rightsLoading, error: rightsError, reload } = useRightsWorkspaceData(workspaceSlug);
+  const [newWork, setNewWork] = useState({
+    title: '',
+    workType: 'recording' as RightsWork['workType'],
+    status: 'In Progress',
+    platformSource: '',
+    releaseStage: '',
+  });
+  const [newEvidence, setNewEvidence] = useState({
+    title: '',
+    evidenceType: 'session',
+    workId: '',
+    fileUrl: '',
+    file: null as File | null,
+  });
+  const [newMemo, setNewMemo] = useState({
+    summary: '',
+    workId: '',
+  });
+  const [panelMessage, setPanelMessage] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState<null | 'work' | 'evidence' | 'memo'>(null);
+  const accessToken = session?.access_token ?? null;
   const score = 92;
   const scoreDegrees = Math.round((score / 100) * 360);
   const platformReview = platformsDatabase.slice(0, 5);
+  const liveWorks = rightsData?.works || [];
+  const liveEvidence = rightsData?.evidence || [];
+  const liveMemos = rightsData?.memos || [];
+  const completedEvidenceCount = Math.min(liveEvidence.length, 16);
+  const evidenceCompletion = liveEvidence.length ? `${completedEvidenceCount} / 16` : '0 / 16';
+  const workOptions = useMemo(
+    () => liveWorks.map((work) => ({ value: work.id, label: work.title })),
+    [liveWorks]
+  );
+
+  const handleCreateWork = async () => {
+    if (!newWork.title.trim()) {
+      setPanelMessage('Work title is required.');
+      return;
+    }
+
+    setSubmitting('work');
+
+    try {
+      await createRightsWork(accessToken, {
+        workspaceSlug,
+        title: newWork.title,
+        workType: newWork.workType,
+        status: newWork.status,
+        platformSource: newWork.platformSource,
+        releaseStage: newWork.releaseStage,
+      });
+      setNewWork({
+        title: '',
+        workType: 'recording',
+        status: 'In Progress',
+        platformSource: '',
+        releaseStage: '',
+      });
+      setPanelMessage('Rights work created.');
+      reload();
+    } catch (error) {
+      setPanelMessage(error instanceof Error ? error.message : 'Failed to create rights work.');
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const handleCreateEvidence = async () => {
+    if (!newEvidence.title.trim()) {
+      setPanelMessage('Evidence title is required.');
+      return;
+    }
+
+    setSubmitting('evidence');
+
+    try {
+      let fileUrl = newEvidence.fileUrl.trim() || undefined;
+
+      if (newEvidence.file) {
+        const upload = await uploadEvidenceFile(accessToken, {
+          workspaceSlug,
+          workId: newEvidence.workId || undefined,
+          file: newEvidence.file,
+        });
+        fileUrl = upload.url;
+      }
+
+      await createEvidenceRecord(accessToken, {
+        workspaceSlug,
+        title: newEvidence.title,
+        evidenceType: newEvidence.evidenceType,
+        workId: newEvidence.workId || undefined,
+        fileUrl,
+      });
+      setNewEvidence({
+        title: '',
+        evidenceType: 'session',
+        workId: '',
+        fileUrl: '',
+        file: null,
+      });
+      setPanelMessage('Evidence record created.');
+      reload();
+    } catch (error) {
+      setPanelMessage(error instanceof Error ? error.message : 'Failed to create evidence.');
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const handleCreateMemo = async () => {
+    if (!newMemo.summary.trim()) {
+      setPanelMessage('Memo summary is required.');
+      return;
+    }
+
+    setSubmitting('memo');
+
+    try {
+      await createRightsMemo(accessToken, {
+        workspaceSlug,
+        summary: newMemo.summary,
+        workId: newMemo.workId || undefined,
+      });
+      setNewMemo({
+        summary: '',
+        workId: '',
+      });
+      setPanelMessage('Rights memo created.');
+      reload();
+    } catch (error) {
+      setPanelMessage(error instanceof Error ? error.message : 'Failed to create memo.');
+    } finally {
+      setSubmitting(null);
+    }
+  };
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show" className="page-shell gap-3">
@@ -291,20 +440,58 @@ export default function Dashboard() {
               <span>Status</span>
               <span>Updated</span>
             </div>
-            {recentWorks.map((work) => (
-              <div key={work.title} className="grid grid-cols-[2fr_0.8fr_0.95fr_0.7fr] gap-3 border-t border-white/7 pt-4 text-sm">
+            {liveWorks.map((work) => (
+              <div key={work.id} className="grid grid-cols-[2fr_0.8fr_0.95fr_0.7fr] gap-3 border-t border-white/7 pt-4 text-sm">
                 <div className="flex items-center gap-3">
-                  <div className={`h-10 w-10 rounded-xl bg-gradient-to-br ${work.accent}`} />
+                  <div className={`h-10 w-10 rounded-xl bg-gradient-to-br ${workAccent(work.workType)}`} />
                   <div className="min-w-0">
                     <div className="truncate font-medium text-white">{work.title}</div>
-                    <div className="truncate text-xs text-white/40">{work.code}</div>
+                    <div className="truncate text-xs text-white/40">{work.platformSource || work.releaseStage || 'Rights workspace item'}</div>
                   </div>
                 </div>
-                <span className="self-center text-white/68">{work.type}</span>
+                <span className="self-center capitalize text-white/68">{work.workType}</span>
                 <span className={`self-center ${statusTone(work.status)}`}>{work.status}</span>
-                <span className="self-center text-white/45">{work.updated}</span>
+                <span className="self-center text-white/45">{relativeTime(work.createdAt)}</span>
               </div>
             ))}
+          </div>
+          <div className="mt-6 rounded-[24px] border border-white/8 bg-white/[0.03] p-4">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-white/35">Create new work</div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <input
+                value={newWork.title}
+                onChange={(event) => setNewWork((current) => ({ ...current, title: event.target.value }))}
+                placeholder="Track or project title"
+                className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+              />
+              <select
+                value={newWork.workType}
+                onChange={(event) => setNewWork((current) => ({ ...current, workType: event.target.value as RightsWork['workType'] }))}
+                className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none"
+              >
+                <option value="composition">Composition</option>
+                <option value="recording">Recording</option>
+                <option value="release">Release</option>
+                <option value="agreement">Agreement</option>
+              </select>
+              <input
+                value={newWork.platformSource}
+                onChange={(event) => setNewWork((current) => ({ ...current, platformSource: event.target.value }))}
+                placeholder="Platform source"
+                className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+              />
+              <input
+                value={newWork.releaseStage}
+                onChange={(event) => setNewWork((current) => ({ ...current, releaseStage: event.target.value }))}
+                placeholder="Release stage"
+                className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+              />
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button type="button" onClick={handleCreateWork} disabled={submitting === 'work'} className="primary-button">
+                {submitting === 'work' ? 'Creating…' : 'Create work'}
+              </button>
+            </div>
           </div>
           <Link href="/playbooks" className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-emerald-200 hover:text-white">
             Go to Works
@@ -321,25 +508,91 @@ export default function Dashboard() {
               </div>
               <p className="mt-2 text-sm text-white/45">Complete and verify the evidence for this work.</p>
             </div>
-            <div className="text-xl text-white">14 <span className="text-white/35">/ 16</span></div>
+            <div className="text-xl text-white">{completedEvidenceCount} <span className="text-white/35">/ 16</span></div>
           </div>
           <div className="mt-5 space-y-1">
-            {evidence.map((item) => (
-              <div key={item.title} className="flex items-start justify-between gap-3 border-t border-white/7 py-4 text-sm">
+            {liveEvidence.map((item) => (
+              <div key={item.id} className="flex items-start justify-between gap-3 border-t border-white/7 py-4 text-sm">
                 <div className="flex items-start gap-3">
                   <span className="mt-0.5 text-white/45">
                     <FileCheck2 className="h-4 w-4" />
                   </span>
                   <div>
                     <div className="text-white/84">{item.title}</div>
-                    <div className="text-xs text-white/40">{item.detail}</div>
+                    <div className="text-xs text-white/40">{item.workTitle ? `${item.evidenceType} for ${item.workTitle}` : item.evidenceType}</div>
+                    {item.fileUrl ? (
+                      <a
+                        href={item.fileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1 inline-flex text-xs text-emerald-200 transition hover:text-white"
+                      >
+                        Open file
+                      </a>
+                    ) : null}
                   </div>
                 </div>
                 <span className="mt-0.5 text-emerald-200">
-                  {item.done ? <Check className="h-4 w-4" /> : <Circle className="h-4 w-4 text-white/35" />}
+                  <Check className="h-4 w-4" />
                 </span>
               </div>
             ))}
+          </div>
+          <div className="mt-6 rounded-[24px] border border-white/8 bg-white/[0.03] p-4">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-white/35">Add evidence</div>
+            <div className="mt-4 grid gap-3">
+              <input
+                value={newEvidence.title}
+                onChange={(event) => setNewEvidence((current) => ({ ...current, title: event.target.value }))}
+                placeholder="Evidence title"
+                className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+              />
+              <div className="grid gap-3 md:grid-cols-2">
+                <input
+                  value={newEvidence.evidenceType}
+                  onChange={(event) => setNewEvidence((current) => ({ ...current, evidenceType: event.target.value }))}
+                  placeholder="Evidence type"
+                  className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+                />
+                <select
+                  value={newEvidence.workId}
+                  onChange={(event) => setNewEvidence((current) => ({ ...current, workId: event.target.value }))}
+                  className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none"
+                >
+                  <option value="">Attach later</option>
+                  {workOptions.map((work) => (
+                    <option key={work.value} value={work.value}>{work.label}</option>
+                  ))}
+                </select>
+              </div>
+              <input
+                value={newEvidence.fileUrl}
+                onChange={(event) => setNewEvidence((current) => ({ ...current, fileUrl: event.target.value }))}
+                placeholder="File URL (optional)"
+                className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+              />
+              <label className="rounded-2xl border border-dashed border-white/10 bg-white/5 px-3 py-3 text-sm text-white/72">
+                <span className="block text-[11px] uppercase tracking-[0.18em] text-white/35">Upload file to Azure Blob</span>
+                <input
+                  type="file"
+                  onChange={(event) =>
+                    setNewEvidence((current) => ({
+                      ...current,
+                      file: event.target.files?.[0] || null,
+                    }))
+                  }
+                  className="mt-3 block w-full text-sm text-white file:mr-4 file:rounded-full file:border-0 file:bg-emerald-300/14 file:px-3 file:py-2 file:text-xs file:font-medium file:text-emerald-100"
+                />
+                <span className="mt-2 block text-xs text-white/42">
+                  {newEvidence.file ? `Selected: ${newEvidence.file.name}` : 'Optional. If selected, this uploads before the evidence record is saved.'}
+                </span>
+              </label>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button type="button" onClick={handleCreateEvidence} disabled={submitting === 'evidence'} className="primary-button">
+                {submitting === 'evidence' ? 'Saving…' : 'Add evidence'}
+              </button>
+            </div>
           </div>
           <Link href="/playbooks" className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-emerald-200 hover:text-white">
             View Evidence Vault
@@ -367,6 +620,53 @@ export default function Dashboard() {
       </motion.section>
 
       <motion.section variants={itemVariants} className="grid gap-4 xl:grid-cols-2">
+        <div className="overview-card p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-2xl font-medium text-white">Rights Memos</div>
+              <p className="mt-2 text-sm text-white/45">Saved release-readiness notes tied to actual works.</p>
+            </div>
+            <div className="text-sm text-white/45">{rightsLoading ? 'Loading…' : `${liveMemos.length} saved`}</div>
+          </div>
+          <div className="mt-5 space-y-4">
+            {liveMemos.map((memo) => (
+              <div key={memo.id} className="rounded-[24px] border border-white/8 bg-white/[0.03] p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs uppercase tracking-[0.18em] text-emerald-100">{memo.workTitle || 'General rights memo'}</div>
+                  <div className="text-xs text-white/35">{relativeTime(memo.createdAt)}</div>
+                </div>
+                <p className="mt-3 text-sm leading-7 text-white/68">{memo.summary}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 rounded-[24px] border border-white/8 bg-white/[0.03] p-4">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-white/35">Draft a memo</div>
+            <div className="mt-4 grid gap-3">
+              <select
+                value={newMemo.workId}
+                onChange={(event) => setNewMemo((current) => ({ ...current, workId: event.target.value }))}
+                className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none"
+              >
+                <option value="">General workspace memo</option>
+                {workOptions.map((work) => (
+                  <option key={work.value} value={work.value}>{work.label}</option>
+                ))}
+              </select>
+              <textarea
+                value={newMemo.summary}
+                onChange={(event) => setNewMemo((current) => ({ ...current, summary: event.target.value }))}
+                placeholder="Summarize the rights position, evidence gaps, or release watchouts..."
+                className="min-h-28 rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+              />
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button type="button" onClick={handleCreateMemo} disabled={submitting === 'memo'} className="primary-button">
+                {submitting === 'memo' ? 'Saving…' : 'Save memo'}
+              </button>
+            </div>
+          </div>
+        </div>
+
         {platformReview.map((platform) => (
           <div key={platform.id} className="rounded-[28px] border border-white/8 bg-white/[0.03] p-5">
             <div className="flex items-center justify-between gap-4">
@@ -382,6 +682,14 @@ export default function Dashboard() {
           </div>
         ))}
       </motion.section>
+
+      {panelMessage || rightsError || rightsData?.warnings?.[0] ? (
+        <motion.section variants={itemVariants} className="rounded-[24px] border border-white/8 bg-white/[0.03] px-5 py-4 text-sm text-white/68">
+          {panelMessage || rightsError || rightsData?.warnings?.[0]}
+          {rightsLoading ? <span className="ml-2 text-white/35">Refreshing workspace data…</span> : null}
+          {!rightsLoading ? <span className="ml-2 text-white/35">{evidenceCompletion} evidence checkpoints represented.</span> : null}
+        </motion.section>
+      ) : null}
     </motion.div>
   );
 }
